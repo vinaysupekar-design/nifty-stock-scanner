@@ -1,5 +1,6 @@
 streamlit
 yfinance
-pandas==2.2.2
+pandas<3.0
+numpy<2.0
 pandas-ta
 requests
