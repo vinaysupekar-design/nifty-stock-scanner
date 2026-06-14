@@ -2,5 +2,5 @@ streamlit
 yfinance
 pandas<3.0
 numpy<2.0
-pandas-ta
+git+https://github.com/twopirllc/pandas-ta.git@main
 requests
