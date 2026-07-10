@@ -1,7 +1,6 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import numpy as np
 import ta
 import requests
 import io
@@ -13,48 +12,19 @@ st.set_page_config(page_title="Nifty Dash Terminal", layout="wide", initial_side
 if 'processed_data' not in st.session_state:
     st.session_state.processed_data = None
 
-# --- 2. THE MASSIVE INDICATOR MAP (Pure Pandas / TA Library) ---
+# --- 2. THE BULLETPROOF INDICATOR MAP ---
+# Using the pure-pandas 'ta' library to avoid Python 3.14 C-API compilation errors
 INDICATOR_MAP = {
-    # Trend
-    "Simple Moving Average (SMA)": lambda df: ta.trend.sma_indicator(df['Close'], window=14),
-    "Exponential Moving Average (EMA)": lambda df: ta.trend.ema_indicator(df['Close'], window=14),
-    "Double EMA (DEMA)": lambda df: ta.trend.dema_indicator(df['Close'], window=14),
-    "MACD": lambda df: ta.trend.macd_diff(df['Close']),
-    "Average Directional Index (ADX)": lambda df: ta.trend.adx(df['High'], df['Low'], df['Close'], window=14),
-    "Parabolic SAR": lambda df: ta.trend.psar_down(df['High'], df['Low'], df['Close']), 
-    "Ichimoku Clouds (Lead A)": lambda df: ta.trend.ichimoku_a(df['High'], df['Low']),
-    "Aroon (Up)": lambda df: ta.trend.aroon_up(df['Close'], window=25),
-    "Detrended Price Oscillator (DPO)": lambda df: ta.trend.dpo(df['Close'], window=20),
-    
-    # Momentum
-    "Relative Strength Index (RSI)": lambda df: ta.momentum.rsi(df['Close'], window=14),
-    "Stochastic Oscillator": lambda df: ta.momentum.stoch(df['High'], df['Low'], df['Close'], window=14),
-    "Stochastic RSI": lambda df: ta.momentum.stochrsi(df['Close'], window=14),
-    "Commodity Channel Index (CCI)": lambda df: ta.trend.cci(df['High'], df['Low'], df['Close'], window=20),
+    "RSI (14)": lambda df: ta.momentum.rsi(df['Close'], window=14),
+    "MACD": lambda df: ta.trend.macd(df['Close']),
+    "ADX (14)": lambda df: ta.trend.adx(df['High'], df['Low'], df['Close'], window=14),
+    "CCI (20)": lambda df: ta.trend.cci(df['High'], df['Low'], df['Close'], window=20),
+    "Money Flow Index (14)": lambda df: ta.volume.money_flow_index(df['High'], df['Low'], df['Close'], df['Volume'], window=14),
     "Williams %R": lambda df: ta.momentum.williams_r(df['High'], df['Low'], df['Close'], lbp=14),
-    "Money Flow Index (MFI)": lambda df: ta.volume.money_flow_index(df['High'], df['Low'], df['Close'], df['Volume'], window=14),
-    "Rate of Change (ROC)": lambda df: ta.momentum.roc(df['Close'], window=12),
-    "Awesome Oscillator (AO)": lambda df: ta.momentum.awesome_oscillator(df['High'], df['Low'], window1=5, window2=34),
-    "Balance of Power (BOP)": lambda df: (df['Close'] - df['Open']) / (df['High'] - df['Low'] + 1e-8), # Pure Pandas
-    "Kaufman Adaptive MA (KAMA)": lambda df: ta.momentum.kama(df['Close'], window=10),
-    "Momentum (MOM)": lambda df: df['Close'].diff(10), # Pure Pandas
-    "Ultimate Oscillator (UO)": lambda df: ta.momentum.ultimate_oscillator(df['High'], df['Low'], df['Close']),
-    "Percentage Price Oscillator (PPO)": lambda df: ta.momentum.ppo(df['Close']),
-    
-    # Volatility
-    "Bollinger Bands (High)": lambda df: ta.volatility.bollinger_hband(df['Close'], window=20, window_dev=2),
+    "Bollinger High": lambda df: ta.volatility.bollinger_hband(df['Close'], window=20, window_dev=2),
+    "Bollinger Low": lambda df: ta.volatility.bollinger_lband(df['Close'], window=20, window_dev=2),
     "Average True Range (ATR)": lambda df: ta.volatility.average_true_range(df['High'], df['Low'], df['Close'], window=14),
-    "Keltner Channel (High)": lambda df: ta.volatility.keltner_channel_hband(df['High'], df['Low'], df['Close'], window=20),
-    "Donchian Channels (High)": lambda df: ta.volatility.donchian_channel_hband(df['High'], df['Low'], df['Close'], window=20),
-    "True Range": lambda df: ta.volatility.average_true_range(df['High'], df['Low'], df['Close'], window=1), 
-    "Ulcer Index": lambda df: ta.volatility.ulcer_index(df['Close'], window=14),
-    
-    # Volume
-    "Accumulation/Distribution (AD)": lambda df: ta.volume.acc_dist_index(df['High'], df['Low'], df['Close'], df['Volume']),
-    "On-Balance Volume (OBV)": lambda df: ta.volume.on_balance_volume(df['Close'], df['Volume']),
-    "Chaikin Money Flow (CMF)": lambda df: ta.volume.chaikin_money_flow(df['High'], df['Low'], df['Close'], df['Volume'], window=20),
-    "Volume Weighted Average Price (VWAP)": lambda df: ta.volume.volume_weighted_average_price(df['High'], df['Low'], df['Close'], df['Volume'], window=14),
-    "Negative Volume Index (NVI)": lambda df: ta.volume.negative_volume_index(df['Close'], df['Volume'])
+    "Stochastic %K": lambda df: ta.momentum.stoch(df['High'], df['Low'], df['Close'], window=14, smooth_window=3)
 }
 
 # --- 3. DATA FETCHING & CALCULATION ---
@@ -101,7 +71,7 @@ def fetch_and_analyze_data(index_choice):
             df['SMA_50'] = ta.trend.sma_indicator(df['Close'], window=50)
             df['SMA_200'] = ta.trend.sma_indicator(df['Close'], window=200)
 
-            # Calculate ALL mapped indicators upfront dynamically
+            # Calculate ALL mapped indicators upfront natively
             for ind_name, func in INDICATOR_MAP.items():
                 try:
                     df[ind_name] = func(df)
@@ -182,31 +152,29 @@ if st.session_state.processed_data is not None:
         selected_indicators = st.sidebar.multiselect(
             "Select Indicators to Filter By:",
             options=list(INDICATOR_MAP.keys()),
-            default=["Relative Strength Index (RSI)", "MACD"]
+            default=["RSI (14)", "MACD"]
         )
         
+        # Base Trend Logic
         ma_logic = st.sidebar.radio("Trend Filter", ["None", "Price > 50 SMA", "Price > 200 SMA"])
         if ma_logic == "Price > 50 SMA": df = df[df['Close_Price'] > df['SMA_50']]
         elif ma_logic == "Price > 200 SMA": df = df[df['Close_Price'] > df['SMA_200']]
 
         display_cols = ['Ticker', 'Close_Price', 'Change_%']
         
-        # Dynamic Slider Generation
+        # New Streamlined Slider Generation
         for ind_name in selected_indicators:
             if ind_name in df.columns:
                 display_cols.append(ind_name) 
                 
-                # Grab min and max safely, skipping NaNs
-                valid_data = df[ind_name].dropna()
-                if valid_data.empty: continue
+                min_val = float(df[ind_name].min())
+                max_val = float(df[ind_name].max())
                 
-                min_val = float(valid_data.min())
-                max_val = float(valid_data.max())
-                
-                if min_val == max_val: continue
+                if pd.isna(min_val) or min_val == max_val: 
+                    continue
                     
-                # Fix specific slider ranges for common oscillators
-                if any(x in ind_name for x in ['RSI', 'MFI', 'ADX']):
+                # Fix ranges for oscillators
+                if 'RSI' in ind_name or 'MFI' in ind_name or 'ADX' in ind_name:
                     s_min, s_max = 0.0, 100.0
                 elif '%R' in ind_name:
                     s_min, s_max = -100.0, 0.0
@@ -260,8 +228,8 @@ if st.session_state.processed_data is not None:
                 
                 with c2:
                     st.caption("KEY METRICS")
-                    if 'Relative Strength Index (RSI)' in df.columns:
-                        st.markdown(f"**RSI:**<br>{stock_data['Relative Strength Index (RSI)']:.2f}", unsafe_allow_html=True)
+                    if 'RSI (14)' in df.columns:
+                        st.markdown(f"**RSI:**<br>{stock_data['RSI (14)']:.2f}", unsafe_allow_html=True)
                     if 'MACD' in df.columns:
                         st.markdown(f"**MACD:**<br>{stock_data['MACD']:.2f}", unsafe_allow_html=True)
             else:
