@@ -1,6 +1,6 @@
-streamlit
-yfinance
-pandas
-numpy<2.0.0
-pandas-ta
+streamlit>=1.30.0
+yfinance>=0.2.36
+numpy==1.26.4
+pandas==2.2.2
+pandas-ta==0.3.14b
 requests
