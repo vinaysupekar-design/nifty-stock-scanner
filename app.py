@@ -1,7 +1,7 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import pandas_ta as ta
+import ta
 import requests
 import io
 import time
@@ -12,49 +12,19 @@ st.set_page_config(page_title="Nifty Dash Terminal", layout="wide", initial_side
 if 'processed_data' not in st.session_state:
     st.session_state.processed_data = None
 
-# --- 2. INDICATOR MAPPING ---
+# --- 2. THE BULLETPROOF INDICATOR MAP ---
+# Using the pure-pandas 'ta' library to avoid Python 3.14 C-API compilation errors
 INDICATOR_MAP = {
-    # Trend
-    "Simple Moving Average (SMA)": "sma",
-    "Exponential Moving Average (EMA)": "ema",
-    "Double EMA (DEMA)": "dema",
-    "MACD": "macd",
-    "Average Directional Index (ADX)": "adx",
-    "Parabolic SAR": "psar",
-    "Supertrend": "supertrend",
-    "Ichimoku Clouds": "ichimoku",
-    "Aroon": "aroon",
-    "Detrended Price Oscillator (DPO)": "dpo",
-    "Linear Regression": "linreg",
-    # Momentum
-    "Relative Strength Index (RSI)": "rsi",
-    "Stochastic Oscillator": "stoch",
-    "Stochastic RSI": "stochrsi",
-    "Commodity Channel Index (CCI)": "cci",
-    "Williams %R": "willr",
-    "Money Flow Index (MFI)": "mfi",
-    "Rate of Change (ROC)": "roc",
-    "Awesome Oscillator (AO)": "ao",
-    "Balance of Power (BOP)": "bop",
-    "Chande Momentum Oscillator (CMO)": "cmo",
-    "Coppock Curve": "coppock",
-    "Momentum (MOM)": "mom",
-    "Ultimate Oscillator (UO)": "uo",
-    "Percentage Price Oscillator (PPO)": "ppo",
-    # Volatility
-    "Bollinger Bands": "bbands",
-    "Average True Range (ATR)": "atr",
-    "Keltner Channel": "kc",
-    "Donchian Channels": "donchian",
-    "True Range": "true_range",
-    "Ulcer Index": "ui",
-    # Volume
-    "Accumulation/Distribution (AD)": "ad",
-    "On-Balance Volume (OBV)": "obv",
-    "Chaikin Money Flow (CMF)": "cmf",
-    "Volume Weighted Average Price (VWAP)": "vwap",
-    "Positive Volume Index (PVI)": "pvi",
-    "Negative Volume Index (NVI)": "nvi"
+    "RSI (14)": lambda df: ta.momentum.rsi(df['Close'], window=14),
+    "MACD": lambda df: ta.trend.macd(df['Close']),
+    "ADX (14)": lambda df: ta.trend.adx(df['High'], df['Low'], df['Close'], window=14),
+    "CCI (20)": lambda df: ta.trend.cci(df['High'], df['Low'], df['Close'], window=20),
+    "Money Flow Index (14)": lambda df: ta.volume.money_flow_index(df['High'], df['Low'], df['Close'], df['Volume'], window=14),
+    "Williams %R": lambda df: ta.momentum.williams_r(df['High'], df['Low'], df['Close'], lbp=14),
+    "Bollinger High": lambda df: ta.volatility.bollinger_hband(df['Close'], window=20, window_dev=2),
+    "Bollinger Low": lambda df: ta.volatility.bollinger_lband(df['Close'], window=20, window_dev=2),
+    "Average True Range (ATR)": lambda df: ta.volatility.average_true_range(df['High'], df['Low'], df['Close'], window=14),
+    "Stochastic %K": lambda df: ta.momentum.stoch(df['High'], df['Low'], df['Close'], window=14, smooth_window=3)
 }
 
 # --- 3. DATA FETCHING & CALCULATION ---
@@ -79,11 +49,10 @@ def fetch_and_analyze_data(index_choice):
 
     latest_data = []
     
-    # Bulk Threaded Download for massive speed improvement
     with st.spinner(f"Bulk downloading market data for {len(tickers)} stocks..."):
         raw_data = yf.download(tickers, period="1y", group_by="ticker", threads=True, progress=False)
 
-    my_bar = st.progress(0, text="Calculating ALL Technical Indicators. Please wait...")
+    my_bar = st.progress(0, text="Calculating Native Technical Indicators...")
 
     for i, ticker in enumerate(tickers):
         try:
@@ -92,21 +61,22 @@ def fetch_and_analyze_data(index_choice):
             if df.empty or len(df) < 50:
                 continue
 
-            # Base calculations for Market Pulse
+            # Core Price Data
             df['Close_Price'] = df['Close']
             df['Prev_Close'] = df['Close'].shift(1)
             df['Change_%'] = ((df['Close'] - df['Prev_Close']) / df['Prev_Close']) * 100
             df['Turnover_Cr'] = (df['Close'] * df['Volume']) / 10000000 
 
-            df['SMA_50'] = df.ta.sma(length=50)
-            df['SMA_200'] = df.ta.sma(length=200)
+            # Base Trend Lines
+            df['SMA_50'] = ta.trend.sma_indicator(df['Close'], window=50)
+            df['SMA_200'] = ta.trend.sma_indicator(df['Close'], window=200)
 
-            # Calculate EVERY indicator in the map upfront
-            for ta_function in INDICATOR_MAP.values():
+            # Calculate ALL mapped indicators upfront natively
+            for ind_name, func in INDICATOR_MAP.items():
                 try:
-                    getattr(df.ta, ta_function)(append=True)
+                    df[ind_name] = func(df)
                 except Exception:
-                    pass 
+                    df[ind_name] = None 
 
             latest_row = df.iloc[-1:].copy()
             latest_row['Ticker'] = ticker.replace(".NS", "")
@@ -124,7 +94,6 @@ def fetch_and_analyze_data(index_choice):
 st.sidebar.title("⚙️ Terminal Settings")
 index_choice = st.sidebar.radio("1. Select Universe", ["Nifty 100", "LargeMidcap 250"])
 
-# The button now just fetches data. We don't pass selected_indicators to the calculation engine anymore.
 if st.sidebar.button("Fetch Market Data", use_container_width=True):
     st.session_state.processed_data = fetch_and_analyze_data(index_choice)
 
@@ -173,7 +142,6 @@ if st.session_state.processed_data is not None:
             turnover = df.nlargest(5, 'Turnover_Cr')[['Ticker', 'Close_Price', 'Turnover_Cr']].set_index('Ticker')
             st.dataframe(turnover.style.format({"Close_Price": "₹{:.2f}", "Turnover_Cr": "₹{:.2f} Cr"}), use_container_width=True)
 
-
     # ==========================================
     # TAB 2: MASTER-DETAIL SCREENER
     # ==========================================
@@ -181,14 +149,11 @@ if st.session_state.processed_data is not None:
         st.sidebar.divider()
         st.sidebar.subheader("2. Filter Screener")
         
-        # User selects which pre-calculated indicators to filter by
         selected_indicators = st.sidebar.multiselect(
             "Select Indicators to Filter By:",
             options=list(INDICATOR_MAP.keys()),
-            default=["Relative Strength Index (RSI)", "MACD"]
+            default=["RSI (14)", "MACD"]
         )
-        
-        available_cols = df.columns.tolist()
         
         # Base Trend Logic
         ma_logic = st.sidebar.radio("Trend Filter", ["None", "Price > 50 SMA", "Price > 200 SMA"])
@@ -197,34 +162,28 @@ if st.session_state.processed_data is not None:
 
         display_cols = ['Ticker', 'Close_Price', 'Change_%']
         
-        # Dynamically generate sliders ONLY for the selected indicators
+        # New Streamlined Slider Generation
         for ind_name in selected_indicators:
-            ta_func = INDICATOR_MAP[ind_name]
-            
-            # Find the exact column name generated by pandas_ta (e.g., finding 'RSI_14' from 'rsi')
-            matched_cols = [c for c in available_cols if c.startswith(ta_func.upper() + '_') or c.startswith(ta_func.upper())]
-            
-            if matched_cols:
-                col_name = matched_cols[0]
-                display_cols.append(col_name) # Add it to the main table display
+            if ind_name in df.columns:
+                display_cols.append(ind_name) 
                 
-                # Build the dynamic slider
-                min_val = float(df[col_name].min())
-                max_val = float(df[col_name].max())
+                min_val = float(df[ind_name].min())
+                max_val = float(df[ind_name].max())
                 
                 if pd.isna(min_val) or min_val == max_val: 
                     continue
                     
-                if ta_func in ['rsi', 'mfi', 'adx']:
+                # Fix ranges for oscillators
+                if 'RSI' in ind_name or 'MFI' in ind_name or 'ADX' in ind_name:
                     s_min, s_max = 0.0, 100.0
-                elif ta_func == 'willr':
+                elif '%R' in ind_name:
                     s_min, s_max = -100.0, 0.0
                 else:
                     buf = abs(max_val - min_val) * 0.05
                     s_min, s_max = min_val - buf, max_val + buf
                     
                 user_range = st.sidebar.slider(f"{ind_name}", float(s_min), float(s_max), (float(min_val), float(max_val)))
-                df = df[(df[col_name] >= user_range[0]) & (df[col_name] <= user_range[1])]
+                df = df[(df[ind_name] >= user_range[0]) & (df[ind_name] <= user_range[1])]
 
         t_col1, t_col2 = st.columns([4, 1])
         t_col1.markdown(f"**{len(df)} Stocks Match Criteria**")
@@ -269,16 +228,12 @@ if st.session_state.processed_data is not None:
                 
                 with c2:
                     st.caption("KEY METRICS")
-                    # Dynamically show metrics if they exist in the row
-                    rsi_search = [c for c in available_cols if c.startswith('RSI_')]
-                    if rsi_search:
-                        st.markdown(f"**RSI:**<br>{stock_data[rsi_search[0]]:.2f}", unsafe_allow_html=True)
-                        
-                    macd_search = [c for c in available_cols if c.startswith('MACD_')]
-                    if macd_search:
-                        st.markdown(f"**MACD:**<br>{stock_data[macd_search[0]]:.2f}", unsafe_allow_html=True)
+                    if 'RSI (14)' in df.columns:
+                        st.markdown(f"**RSI:**<br>{stock_data['RSI (14)']:.2f}", unsafe_allow_html=True)
+                    if 'MACD' in df.columns:
+                        st.markdown(f"**MACD:**<br>{stock_data['MACD']:.2f}", unsafe_allow_html=True)
             else:
-                st.info("👆 Click on any row in the table to the left to view a deep-dive analysis of that stock here.")
+                st.info("👆 Click on any row in the table to view a deep-dive analysis of that stock here.")
 
 else:
     st.title("NIFTY.DASH")
