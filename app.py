@@ -1,6 +1,7 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import numpy as np
 import ta
 import requests
 import io
@@ -12,8 +13,7 @@ st.set_page_config(page_title="Nifty Dash Terminal", layout="wide", initial_side
 if 'processed_data' not in st.session_state:
     st.session_state.processed_data = None
 
-# --- 2. THE BULLETPROOF INDICATOR MAP ---
-# Using the pure-pandas 'ta' library to avoid Python 3.14 C-API compilation errors
+# --- 2. THE MASSIVE INDICATOR MAP (Pure Pandas / TA Library) ---
 INDICATOR_MAP = {
     # Trend
     "Simple Moving Average (SMA)": lambda df: ta.trend.sma_indicator(df['Close'], window=14),
@@ -101,7 +101,7 @@ def fetch_and_analyze_data(index_choice):
             df['SMA_50'] = ta.trend.sma_indicator(df['Close'], window=50)
             df['SMA_200'] = ta.trend.sma_indicator(df['Close'], window=200)
 
-            # Calculate ALL mapped indicators upfront natively
+            # Calculate ALL mapped indicators upfront dynamically
             for ind_name, func in INDICATOR_MAP.items():
                 try:
                     df[ind_name] = func(df)
@@ -182,29 +182,31 @@ if st.session_state.processed_data is not None:
         selected_indicators = st.sidebar.multiselect(
             "Select Indicators to Filter By:",
             options=list(INDICATOR_MAP.keys()),
-            default=["RSI (14)", "MACD"]
+            default=["Relative Strength Index (RSI)", "MACD"]
         )
         
-        # Base Trend Logic
         ma_logic = st.sidebar.radio("Trend Filter", ["None", "Price > 50 SMA", "Price > 200 SMA"])
         if ma_logic == "Price > 50 SMA": df = df[df['Close_Price'] > df['SMA_50']]
         elif ma_logic == "Price > 200 SMA": df = df[df['Close_Price'] > df['SMA_200']]
 
         display_cols = ['Ticker', 'Close_Price', 'Change_%']
         
-        # New Streamlined Slider Generation
+        # Dynamic Slider Generation
         for ind_name in selected_indicators:
             if ind_name in df.columns:
                 display_cols.append(ind_name) 
                 
-                min_val = float(df[ind_name].min())
-                max_val = float(df[ind_name].max())
+                # Grab min and max safely, skipping NaNs
+                valid_data = df[ind_name].dropna()
+                if valid_data.empty: continue
                 
-                if pd.isna(min_val) or min_val == max_val: 
-                    continue
+                min_val = float(valid_data.min())
+                max_val = float(valid_data.max())
+                
+                if min_val == max_val: continue
                     
-                # Fix ranges for oscillators
-                if 'RSI' in ind_name or 'MFI' in ind_name or 'ADX' in ind_name:
+                # Fix specific slider ranges for common oscillators
+                if any(x in ind_name for x in ['RSI', 'MFI', 'ADX']):
                     s_min, s_max = 0.0, 100.0
                 elif '%R' in ind_name:
                     s_min, s_max = -100.0, 0.0
@@ -258,8 +260,8 @@ if st.session_state.processed_data is not None:
                 
                 with c2:
                     st.caption("KEY METRICS")
-                    if 'RSI (14)' in df.columns:
-                        st.markdown(f"**RSI:**<br>{stock_data['RSI (14)']:.2f}", unsafe_allow_html=True)
+                    if 'Relative Strength Index (RSI)' in df.columns:
+                        st.markdown(f"**RSI:**<br>{stock_data['Relative Strength Index (RSI)']:.2f}", unsafe_allow_html=True)
                     if 'MACD' in df.columns:
                         st.markdown(f"**MACD:**<br>{stock_data['MACD']:.2f}", unsafe_allow_html=True)
             else:
