@@ -69,7 +69,7 @@ def fetch_nse_tickers(url):
         return []
 
 @st.cache_data(ttl=86400) 
-def fetch_and_analyze_data(index_choice, selected_indicators):
+def fetch_and_analyze_data(index_choice):
     url_100 = "https://niftyindices.com/IndexConstituent/ind_nifty100list.csv"
     url_250 = "https://niftyindices.com/IndexConstituent/ind_niftylargemidcap250list.csv"
 
@@ -78,41 +78,44 @@ def fetch_and_analyze_data(index_choice, selected_indicators):
         tickers = ["RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "TRENT.NS", "BEL.NS"]
 
     latest_data = []
-    progress_text = "Downloading Market Data. Please wait..."
-    my_bar = st.progress(0, text=progress_text)
+    
+    # Bulk Threaded Download for massive speed improvement
+    with st.spinner(f"Bulk downloading market data for {len(tickers)} stocks..."):
+        raw_data = yf.download(tickers, period="1y", group_by="ticker", threads=True, progress=False)
+
+    my_bar = st.progress(0, text="Calculating ALL Technical Indicators. Please wait...")
 
     for i, ticker in enumerate(tickers):
-        df = yf.download(ticker, period="1y", progress=False)
-        if df.empty or len(df) < 50:
-            continue
+        try:
+            df = raw_data[ticker].copy().dropna() if len(tickers) > 1 else raw_data.copy().dropna()
+            
+            if df.empty or len(df) < 50:
+                continue
 
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.droplevel(1)
+            # Base calculations for Market Pulse
+            df['Close_Price'] = df['Close']
+            df['Prev_Close'] = df['Close'].shift(1)
+            df['Change_%'] = ((df['Close'] - df['Prev_Close']) / df['Prev_Close']) * 100
+            df['Turnover_Cr'] = (df['Close'] * df['Volume']) / 10000000 
 
-        # Base calculations for Market Pulse
-        df['Close_Price'] = df['Close']
-        df['Prev_Close'] = df['Close'].shift(1)
-        df['Change_%'] = ((df['Close'] - df['Prev_Close']) / df['Prev_Close']) * 100
-        df['Turnover_Cr'] = (df['Close'] * df['Volume']) / 10000000 # Convert to Crores
+            df['SMA_50'] = df.ta.sma(length=50)
+            df['SMA_200'] = df.ta.sma(length=200)
 
-        df['SMA_50'] = df.ta.sma(length=50)
-        df['SMA_200'] = df.ta.sma(length=200)
-
-        # Dynamic Indicators
-        for indicator_name in selected_indicators:
-            ta_function = INDICATOR_MAP.get(indicator_name)
-            if ta_function:
+            # Calculate EVERY indicator in the map upfront
+            for ta_function in INDICATOR_MAP.values():
                 try:
                     getattr(df.ta, ta_function)(append=True)
                 except Exception:
                     pass 
 
-        latest_row = df.iloc[-1:].copy()
-        latest_row['Ticker'] = ticker.replace(".NS", "")
-        latest_data.append(latest_row)
+            latest_row = df.iloc[-1:].copy()
+            latest_row['Ticker'] = ticker.replace(".NS", "")
+            latest_data.append(latest_row)
+            
+        except Exception:
+            continue
 
-        my_bar.progress((i + 1) / len(tickers), text=progress_text)
-        time.sleep(0.01)
+        my_bar.progress((i + 1) / len(tickers))
 
     my_bar.empty()
     return pd.concat(latest_data, ignore_index=True)
@@ -121,29 +124,22 @@ def fetch_and_analyze_data(index_choice, selected_indicators):
 st.sidebar.title("⚙️ Terminal Settings")
 index_choice = st.sidebar.radio("1. Select Universe", ["Nifty 100", "LargeMidcap 250"])
 
-selected_indicators = st.sidebar.multiselect(
-    "2. Add Indicators to Screener",
-    options=list(INDICATOR_MAP.keys()),
-    default=["Relative Strength Index (RSI)", "MACD", "Average Directional Index (ADX)"]
-)
-
+# The button now just fetches data. We don't pass selected_indicators to the calculation engine anymore.
 if st.sidebar.button("Fetch Market Data", use_container_width=True):
-    st.session_state.processed_data = fetch_and_analyze_data(index_choice, selected_indicators)
+    st.session_state.processed_data = fetch_and_analyze_data(index_choice)
 
 # --- 5. MAIN DASHBOARD ---
 if st.session_state.processed_data is not None:
     df = st.session_state.processed_data.copy()
     
-    # Create the two main views
     tab1, tab2 = st.tabs(["📊 Market Pulse", "🎯 Interactive Screener"])
 
     # ==========================================
-    # TAB 1: MARKET PULSE (Image 1 Replica)
+    # TAB 1: MARKET PULSE
     # ==========================================
     with tab1:
         st.subheader(f"Market Pulse ({time.strftime('%Y-%m-%d')})")
         
-        # Top Level Metrics
         advancers = len(df[df['Change_%'] > 0])
         decliners = len(df[df['Change_%'] < 0])
         total_turnover = df['Turnover_Cr'].sum()
@@ -156,10 +152,9 @@ if st.session_state.processed_data is not None:
         
         st.divider()
         
-        # Color styling function for dataframes
         def color_change(val):
-            color = 'green' if val > 0 else 'red'
-            return f'color: {color}'
+            if pd.isna(val): return ''
+            return 'color: green' if val > 0 else 'color: red'
 
         col_g, col_l, col_t = st.columns(3)
         
@@ -180,49 +175,68 @@ if st.session_state.processed_data is not None:
 
 
     # ==========================================
-    # TAB 2: MASTER-DETAIL SCREENER (Image 2 Replica)
+    # TAB 2: MASTER-DETAIL SCREENER
     # ==========================================
     with tab2:
-        # Dynamic Sidebar Filters (Only show in Tab 2)
         st.sidebar.divider()
-        st.sidebar.subheader("3. Active Filters")
+        st.sidebar.subheader("2. Filter Screener")
+        
+        # User selects which pre-calculated indicators to filter by
+        selected_indicators = st.sidebar.multiselect(
+            "Select Indicators to Filter By:",
+            options=list(INDICATOR_MAP.keys()),
+            default=["Relative Strength Index (RSI)", "MACD"]
+        )
+        
         available_cols = df.columns.tolist()
         
+        # Base Trend Logic
         ma_logic = st.sidebar.radio("Trend Filter", ["None", "Price > 50 SMA", "Price > 200 SMA"])
-        if ma_logic == "Price > 50 SMA":
-            df = df[df['Close_Price'] > df['SMA_50']]
-        elif ma_logic == "Price > 200 SMA":
-            df = df[df['Close_Price'] > df['SMA_200']]
+        if ma_logic == "Price > 50 SMA": df = df[df['Close_Price'] > df['SMA_50']]
+        elif ma_logic == "Price > 200 SMA": df = df[df['Close_Price'] > df['SMA_200']]
 
-        rsi_cols = [c for c in available_cols if c.startswith('RSI_')]
-        if rsi_cols:
-            rsi_min, rsi_max = st.sidebar.slider(f"Target {rsi_cols[0]}", 0, 100, (0, 100))
-            df = df[(df[rsi_cols[0]] >= rsi_min) & (df[rsi_cols[0]] <= rsi_max)]
+        display_cols = ['Ticker', 'Close_Price', 'Change_%']
+        
+        # Dynamically generate sliders ONLY for the selected indicators
+        for ind_name in selected_indicators:
+            ta_func = INDICATOR_MAP[ind_name]
             
-        adx_cols = [c for c in available_cols if c.startswith('ADX_')]
-        if adx_cols:
-            adx_min = st.sidebar.slider(f"Min {adx_cols[0]}", 0, 100, 0)
-            df = df[df[adx_cols[0]] >= adx_min]
+            # Find the exact column name generated by pandas_ta (e.g., finding 'RSI_14' from 'rsi')
+            matched_cols = [c for c in available_cols if c.startswith(ta_func.upper() + '_') or c.startswith(ta_func.upper())]
+            
+            if matched_cols:
+                col_name = matched_cols[0]
+                display_cols.append(col_name) # Add it to the main table display
+                
+                # Build the dynamic slider
+                min_val = float(df[col_name].min())
+                max_val = float(df[col_name].max())
+                
+                if pd.isna(min_val) or min_val == max_val: 
+                    continue
+                    
+                if ta_func in ['rsi', 'mfi', 'adx']:
+                    s_min, s_max = 0.0, 100.0
+                elif ta_func == 'willr':
+                    s_min, s_max = -100.0, 0.0
+                else:
+                    buf = abs(max_val - min_val) * 0.05
+                    s_min, s_max = min_val - buf, max_val + buf
+                    
+                user_range = st.sidebar.slider(f"{ind_name}", float(s_min), float(s_max), (float(min_val), float(max_val)))
+                df = df[(df[col_name] >= user_range[0]) & (df[col_name] <= user_range[1])]
 
-        # Top Bar: Stock Count & Download Button
         t_col1, t_col2 = st.columns([4, 1])
         t_col1.markdown(f"**{len(df)} Stocks Match Criteria**")
         
         csv_data = df.to_csv(index=False).encode('utf-8')
-        t_col2.download_button("📥 Download Data", data=csv_data, file_name="nifty_screener_data.csv", mime="text/csv", use_container_width=True)
+        t_col2.download_button("📥 Download Data", data=csv_data, file_name="screener_data.csv", mime="text/csv", use_container_width=True)
 
-        # The Master-Detail Layout (70% Left Table, 30% Right Panel)
         sc1, sc2 = st.columns([2.5, 1])
         
         with sc1:
-            # Prepare clean dataframe for the left side
-            display_cols = ['Ticker', 'Close_Price', 'Change_%']
-            if rsi_cols: display_cols.append(rsi_cols[0])
-            if adx_cols: display_cols.append(adx_cols[0])
-            
             clean_df = df[display_cols].set_index('Ticker').round(2)
             
-            # Interactive Dataframe: on_select allows clicking a row to update the UI
             event = st.dataframe(
                 clean_df.style.map(color_change, subset=['Change_%']).format({"Change_%": "{:.2f}%"}),
                 use_container_width=True,
@@ -233,16 +247,12 @@ if st.session_state.processed_data is not None:
 
         with sc2:
             st.markdown("### 📊 Detail Panel")
-            
-            # Catch the row selected by the user
             selected_rows = event.selection.rows
             
             if selected_rows:
-                # Get the ticker name from the selected row index
                 selected_ticker = clean_df.index[selected_rows[0]]
                 stock_data = df[df['Ticker'] == selected_ticker].iloc[0]
                 
-                # Big Header Card
                 st.markdown(f"## {selected_ticker}")
                 st.markdown(f"### ₹ {stock_data['Close_Price']:.2f}")
                 
@@ -251,13 +261,6 @@ if st.session_state.processed_data is not None:
                 
                 st.divider()
                 
-                # RSI Visual Gauge
-                if rsi_cols:
-                    rsi_val = stock_data[rsi_cols[0]]
-                    st.caption("RSI GAUGE")
-                    st.progress(int(rsi_val), text=f"RSI: {rsi_val:.1f}")
-                
-                # Categorized Indicators
                 c1, c2 = st.columns(2)
                 with c1:
                     st.caption("TREND")
@@ -265,20 +268,19 @@ if st.session_state.processed_data is not None:
                     st.markdown(f"**SMA 200:**<br>₹{stock_data['SMA_200']:.2f}", unsafe_allow_html=True)
                 
                 with c2:
-                    st.caption("MOMENTUM")
-                    if adx_cols:
-                        st.markdown(f"**ADX:**<br>{stock_data[adx_cols[0]]:.2f}", unsafe_allow_html=True)
-                    
-                    macd_cols = [c for c in available_cols if c.startswith('MACD_')]
-                    if macd_cols:
-                        st.markdown(f"**MACD:**<br>{stock_data[macd_cols[0]]:.2f}", unsafe_allow_html=True)
-
+                    st.caption("KEY METRICS")
+                    # Dynamically show metrics if they exist in the row
+                    rsi_search = [c for c in available_cols if c.startswith('RSI_')]
+                    if rsi_search:
+                        st.markdown(f"**RSI:**<br>{stock_data[rsi_search[0]]:.2f}", unsafe_allow_html=True)
+                        
+                    macd_search = [c for c in available_cols if c.startswith('MACD_')]
+                    if macd_search:
+                        st.markdown(f"**MACD:**<br>{stock_data[macd_search[0]]:.2f}", unsafe_allow_html=True)
             else:
-                # Default empty state
                 st.info("👆 Click on any row in the table to the left to view a deep-dive analysis of that stock here.")
 
 else:
-    # Landing page before data is fetched
     st.title("NIFTY.DASH")
     st.markdown("### Market Intelligence Terminal")
-    st.info("👈 Please select your universe and indicators in the sidebar, then click **Fetch Market Data** to begin.")
+    st.info("👈 Please select your universe in the sidebar, then click **Fetch Market Data** to begin.")
