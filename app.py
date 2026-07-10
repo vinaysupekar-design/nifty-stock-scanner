@@ -15,16 +15,46 @@ if 'processed_data' not in st.session_state:
 # --- 2. THE BULLETPROOF INDICATOR MAP ---
 # Using the pure-pandas 'ta' library to avoid Python 3.14 C-API compilation errors
 INDICATOR_MAP = {
-    "RSI (14)": lambda df: ta.momentum.rsi(df['Close'], window=14),
-    "MACD": lambda df: ta.trend.macd(df['Close']),
-    "ADX (14)": lambda df: ta.trend.adx(df['High'], df['Low'], df['Close'], window=14),
-    "CCI (20)": lambda df: ta.trend.cci(df['High'], df['Low'], df['Close'], window=20),
-    "Money Flow Index (14)": lambda df: ta.volume.money_flow_index(df['High'], df['Low'], df['Close'], df['Volume'], window=14),
+    # Trend
+    "Simple Moving Average (SMA)": lambda df: ta.trend.sma_indicator(df['Close'], window=14),
+    "Exponential Moving Average (EMA)": lambda df: ta.trend.ema_indicator(df['Close'], window=14),
+    "Double EMA (DEMA)": lambda df: ta.trend.dema_indicator(df['Close'], window=14),
+    "MACD": lambda df: ta.trend.macd_diff(df['Close']),
+    "Average Directional Index (ADX)": lambda df: ta.trend.adx(df['High'], df['Low'], df['Close'], window=14),
+    "Parabolic SAR": lambda df: ta.trend.psar_down(df['High'], df['Low'], df['Close']), 
+    "Ichimoku Clouds (Lead A)": lambda df: ta.trend.ichimoku_a(df['High'], df['Low']),
+    "Aroon (Up)": lambda df: ta.trend.aroon_up(df['Close'], window=25),
+    "Detrended Price Oscillator (DPO)": lambda df: ta.trend.dpo(df['Close'], window=20),
+    
+    # Momentum
+    "Relative Strength Index (RSI)": lambda df: ta.momentum.rsi(df['Close'], window=14),
+    "Stochastic Oscillator": lambda df: ta.momentum.stoch(df['High'], df['Low'], df['Close'], window=14),
+    "Stochastic RSI": lambda df: ta.momentum.stochrsi(df['Close'], window=14),
+    "Commodity Channel Index (CCI)": lambda df: ta.trend.cci(df['High'], df['Low'], df['Close'], window=20),
     "Williams %R": lambda df: ta.momentum.williams_r(df['High'], df['Low'], df['Close'], lbp=14),
-    "Bollinger High": lambda df: ta.volatility.bollinger_hband(df['Close'], window=20, window_dev=2),
-    "Bollinger Low": lambda df: ta.volatility.bollinger_lband(df['Close'], window=20, window_dev=2),
+    "Money Flow Index (MFI)": lambda df: ta.volume.money_flow_index(df['High'], df['Low'], df['Close'], df['Volume'], window=14),
+    "Rate of Change (ROC)": lambda df: ta.momentum.roc(df['Close'], window=12),
+    "Awesome Oscillator (AO)": lambda df: ta.momentum.awesome_oscillator(df['High'], df['Low'], window1=5, window2=34),
+    "Balance of Power (BOP)": lambda df: (df['Close'] - df['Open']) / (df['High'] - df['Low'] + 1e-8), # Pure Pandas
+    "Kaufman Adaptive MA (KAMA)": lambda df: ta.momentum.kama(df['Close'], window=10),
+    "Momentum (MOM)": lambda df: df['Close'].diff(10), # Pure Pandas
+    "Ultimate Oscillator (UO)": lambda df: ta.momentum.ultimate_oscillator(df['High'], df['Low'], df['Close']),
+    "Percentage Price Oscillator (PPO)": lambda df: ta.momentum.ppo(df['Close']),
+    
+    # Volatility
+    "Bollinger Bands (High)": lambda df: ta.volatility.bollinger_hband(df['Close'], window=20, window_dev=2),
     "Average True Range (ATR)": lambda df: ta.volatility.average_true_range(df['High'], df['Low'], df['Close'], window=14),
-    "Stochastic %K": lambda df: ta.momentum.stoch(df['High'], df['Low'], df['Close'], window=14, smooth_window=3)
+    "Keltner Channel (High)": lambda df: ta.volatility.keltner_channel_hband(df['High'], df['Low'], df['Close'], window=20),
+    "Donchian Channels (High)": lambda df: ta.volatility.donchian_channel_hband(df['High'], df['Low'], df['Close'], window=20),
+    "True Range": lambda df: ta.volatility.average_true_range(df['High'], df['Low'], df['Close'], window=1), 
+    "Ulcer Index": lambda df: ta.volatility.ulcer_index(df['Close'], window=14),
+    
+    # Volume
+    "Accumulation/Distribution (AD)": lambda df: ta.volume.acc_dist_index(df['High'], df['Low'], df['Close'], df['Volume']),
+    "On-Balance Volume (OBV)": lambda df: ta.volume.on_balance_volume(df['Close'], df['Volume']),
+    "Chaikin Money Flow (CMF)": lambda df: ta.volume.chaikin_money_flow(df['High'], df['Low'], df['Close'], df['Volume'], window=20),
+    "Volume Weighted Average Price (VWAP)": lambda df: ta.volume.volume_weighted_average_price(df['High'], df['Low'], df['Close'], df['Volume'], window=14),
+    "Negative Volume Index (NVI)": lambda df: ta.volume.negative_volume_index(df['Close'], df['Volume'])
 }
 
 # --- 3. DATA FETCHING & CALCULATION ---
